@@ -1747,7 +1747,7 @@ wheels = [
 ]
 
 [[package]]
-name = "safebite-agent"
+name = "safebite"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
