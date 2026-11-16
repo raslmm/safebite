@@ -84,7 +84,7 @@ class GoogleInteractionsModel:
     def __init__(self) -> None:
         if not config.GOOGLE_API_KEY:
             raise MissingAPIKey(
-                "GOOGLE_API_KEY is missing. Copy .env.example to this repository's .env and add your key."
+                "GOOGLE_API_KEY is missing. Add it to this repo's .env or the Streamlit app's Secrets settings."
             )
         self._client = genai.Client(api_key=config.GOOGLE_API_KEY)
 
@@ -157,7 +157,7 @@ def first_hello() -> ModelReply:
     """Make one short Interactions API call and trace it"""
     if not config.GOOGLE_API_KEY:
         raise MissingAPIKey(
-            "GOOGLE_API_KEY is missing. Copy .env.example to this repository's .env and add your key."
+            "GOOGLE_API_KEY is missing. Add it to this repo's .env or the Streamlit app's Secrets settings."
         )
 
     prompt = "Say hello in one short sentence."
