@@ -54,11 +54,20 @@ class LabelExtraction(Contract):
     contains_text: str | None = None
     may_contain_text: str | None = None
     uncertain_fields: list[LabelField] = []
+    uncertain_terms: list[str] = []
     is_complete: bool
     human_reviewed: bool = False
 
 
 EvidenceLocation = Literal["ingredients", "contains", "may_contain"]
+EvidenceType = Literal[
+    "direct_match",
+    "possible_match",
+    "legal_exception_review",
+    "threshold_unknown",
+    "below_threshold",
+    "unresolved_extraction",
+]
 
 
 class AllergenEvidence(Contract):
@@ -66,6 +75,7 @@ class AllergenEvidence(Contract):
 
     allergen_id: AllergenId
     location: EvidenceLocation
+    evidence_type: EvidenceType
     quote: str
     source_id: str
     source_version: str
@@ -85,6 +95,8 @@ class AllergenReference(Contract):
     name_pt: str
     match_terms_en: tuple[str, ...]
     match_terms_pt: tuple[str, ...]
+    exception_terms_en: tuple[str, ...] = ()
+    exception_terms_pt: tuple[str, ...] = ()
     legal_note_en: str | None = None
     legal_note_pt: str | None = None
 

@@ -1,7 +1,9 @@
-"""Portuguese/English reference for EU Annex II allergen groups.
+"""Portuguese/English starter reference for EU Annex II allergen groups.
 
-The terms are limited to canonical group names and the examples expressly named in Annex II. This is not a complete ingredient or synonym dictionary. A missing term must remain uncertain; it must never be treated as evidence of no risk.
-Legal notes are review flags, not rules that this module applies to a product.
+Terms include canonical group names, direct singular/plural variants, and
+examples named in Annex II. This is not a complete ingredient dictionary. A
+missing term remains uncertain, never evidence of no risk. Exception phrases
+are review flags, not a full legal interpretation of a product.
 """
 
 from safebite_agent.schemas import (
@@ -33,6 +35,7 @@ EU_ALLERGEN_CATALOG = AllergenCatalog(
                 "rye",
                 "barley",
                 "oats",
+                "oat",
                 "spelt",
                 "Khorasan wheat",
             ),
@@ -53,27 +56,39 @@ EU_ALLERGEN_CATALOG = AllergenCatalog(
                 "O anexo II prevê exceções específicas para derivados de cereais; confirme o "
                 "produto e o texto legal antes de classificar um derivado como correspondência."
             ),
+            exception_terms_en=(
+                "wheat based glucose syrups including dextrose",
+                "wheat based maltodextrins",
+                "glucose syrups based on barley",
+                "cereals used for making alcoholic distillates including ethyl alcohol of agricultural origin",
+            ),
+            exception_terms_pt=(
+                "xaropes de glucose à base de trigo, incluindo dextrose",
+                "maltodextrinas à base de trigo",
+                "xaropes de glucose à base de cevada",
+                "cereais utilizados no fabrico de destilados alcoólicos, incluindo álcool etílico de origem agrícola",
+            ),
         ),
         AllergenReference(
             allergen_id=AllergenId.CRUSTACEANS,
             name_en="Crustaceans",
             name_pt="Crustáceos",
-            match_terms_en=("Crustaceans",),
-            match_terms_pt=("Crustáceos",),
+            match_terms_en=("Crustaceans", "Crustacean"),
+            match_terms_pt=("Crustáceos", "Crustáceo"),
         ),
         AllergenReference(
             allergen_id=AllergenId.EGGS,
             name_en="Eggs",
             name_pt="Ovos",
-            match_terms_en=("Eggs",),
-            match_terms_pt=("Ovos",),
+            match_terms_en=("Eggs", "Egg"),
+            match_terms_pt=("Ovos", "Ovo"),
         ),
         AllergenReference(
             allergen_id=AllergenId.FISH,
             name_en="Fish",
             name_pt="Peixes",
             match_terms_en=("Fish",),
-            match_terms_pt=("Peixes",),
+            match_terms_pt=("Peixes", "Peixe"),
             legal_note_en=(
                 "Annex II contains specific exceptions for certain fish-derived products; "
                 "review them before classifying a derivative."
@@ -82,20 +97,48 @@ EU_ALLERGEN_CATALOG = AllergenCatalog(
                 "O anexo II prevê exceções específicas para certos produtos derivados de peixe; "
                 "confirme-as antes de classificar um derivado."
             ),
+            exception_terms_en=(
+                "fish gelatine used as carrier for vitamin or carotenoid preparations",
+                "fish gelatine or isinglass used as fining agent in beer and wine",
+            ),
+            exception_terms_pt=(
+                "gelatina de peixe utilizada como suporte de preparados de vitaminas ou carotenoides",
+                "gelatina de peixe ou ictiocola utilizada como clarificante na cerveja e no vinho",
+            ),
         ),
         AllergenReference(
             allergen_id=AllergenId.PEANUTS,
             name_en="Peanuts",
             name_pt="Amendoins",
-            match_terms_en=("Peanuts",),
-            match_terms_pt=("Amendoins",),
+            match_terms_en=("Peanuts", "Peanut"),
+            match_terms_pt=("Amendoins", "Amendoim"),
         ),
         AllergenReference(
             allergen_id=AllergenId.SOYBEANS,
             name_en="Soybeans",
             name_pt="Soja",
-            match_terms_en=("Soybeans",),
+            match_terms_en=("Soybeans", "Soybean", "Soy"),
             match_terms_pt=("Soja",),
+            exception_terms_en=(
+                "fully refined soybean oil",
+                "fully refined soybean fat",
+                "natural mixed tocopherols e306 from soybean sources",
+                "natural d-alpha tocopherol from soybean sources",
+                "natural d-alpha tocopherol acetate from soybean sources",
+                "natural d-alpha tocopherol succinate from soybean sources",
+                "phytosterols and phytosterol esters from soybean sources",
+                "plant stanol ester produced from vegetable oil sterols from soybean sources",
+            ),
+            exception_terms_pt=(
+                "óleo de soja totalmente refinado",
+                "gordura de soja totalmente refinada",
+                "tocoferóis mistos naturais e306 derivados de soja",
+                "d-alfa-tocoferol natural derivado de soja",
+                "acetato de d-alfa-tocoferol natural derivado de soja",
+                "succinato de d-alfa-tocoferol natural derivado de soja",
+                "fitoesteróis e ésteres de fitoesterol derivados de soja",
+                "éster de estanol vegetal produzido a partir de esteróis de óleo vegetal de soja",
+            ),
             legal_note_en=(
                 "Annex II lists specific soy-derived exemptions, including fully refined oil "
                 "and fat; check the exact product and legal text."
@@ -111,6 +154,14 @@ EU_ALLERGEN_CATALOG = AllergenCatalog(
             name_pt="Leite",
             match_terms_en=("Milk", "lactose"),
             match_terms_pt=("Leite", "lactose"),
+            exception_terms_en=(
+                "whey used for making alcoholic distillates including ethyl alcohol of agricultural origin",
+                "lactitol",
+            ),
+            exception_terms_pt=(
+                "lactossoro utilizado no fabrico de destilados alcoólicos, incluindo álcool etílico de origem agrícola",
+                "lactitol",
+            ),
             legal_note_en=(
                 "Annex II lists specific exceptions for whey used in distillates and lactitol."
             ),
@@ -134,6 +185,14 @@ EU_ALLERGEN_CATALOG = AllergenCatalog(
                 "pistachios",
                 "macadamia nuts",
                 "Queensland nuts",
+                "almond",
+                "hazelnut",
+                "walnut",
+                "cashew",
+                "pecan nut",
+                "Brazil nut",
+                "pistachio nut",
+                "macadamia nut",
             ),
             match_terms_pt=(
                 "Frutos de casca rija",
@@ -146,6 +205,14 @@ EU_ALLERGEN_CATALOG = AllergenCatalog(
                 "pistácios",
                 "nozes de macadâmia",
                 "nozes do Queensland",
+                "amêndoa",
+                "avelã",
+                "castanha de caju",
+                "noz pecã",
+                "castanha do Brasil",
+                "pistácio",
+                "noz de macadâmia",
+                "noz do Queensland",
             ),
             legal_note_en=(
                 "Annex II names eight nut types and provides an exception for nuts used in "
@@ -154,6 +221,12 @@ EU_ALLERGEN_CATALOG = AllergenCatalog(
             legal_note_pt=(
                 "O anexo II enumera oito tipos de frutos de casca rija e prevê uma exceção para "
                 "os usados em destilados alcoólicos. Não alargue o grupo sem revisão."
+            ),
+            exception_terms_en=(
+                "nuts used for making alcoholic distillates including ethyl alcohol of agricultural origin",
+            ),
+            exception_terms_pt=(
+                "frutos de casca rija utilizados na confeção de destilados alcoólicos, incluindo álcool etílico de origem agrícola",
             ),
         ),
         AllergenReference(
@@ -174,8 +247,8 @@ EU_ALLERGEN_CATALOG = AllergenCatalog(
             allergen_id=AllergenId.SESAME,
             name_en="Sesame seeds",
             name_pt="Sementes de sésamo",
-            match_terms_en=("Sesame seeds",),
-            match_terms_pt=("Sementes de sésamo",),
+            match_terms_en=("Sesame seeds", "sesame seed", "sesame"),
+            match_terms_pt=("Sementes de sésamo", "semente de sésamo", "sésamo"),
         ),
         AllergenReference(
             allergen_id=AllergenId.SULPHITES,
@@ -207,15 +280,15 @@ EU_ALLERGEN_CATALOG = AllergenCatalog(
             allergen_id=AllergenId.LUPIN,
             name_en="Lupin",
             name_pt="Tremoço",
-            match_terms_en=("Lupin",),
-            match_terms_pt=("Tremoço",),
+            match_terms_en=("Lupin", "Lupins"),
+            match_terms_pt=("Tremoço", "Tremoços"),
         ),
         AllergenReference(
             allergen_id=AllergenId.MOLLUSCS,
             name_en="Molluscs",
             name_pt="Moluscos",
-            match_terms_en=("Molluscs",),
-            match_terms_pt=("Moluscos",),
+            match_terms_en=("Molluscs", "Mollusc", "Mollusks", "Mollusk"),
+            match_terms_pt=("Moluscos", "Molusco"),
         ),
     ),
 )
