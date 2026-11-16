@@ -25,5 +25,3 @@ Make one short live request when a key is configured:
 uv run python check_setup.py --api
 uv run python hello_ai.py
 ~~~
-
-Optional Langfuse tracing is off until both tracing keys are provided. Trace content is off by default; enable it only with synthetic data or appropriate consent. See docs/SAFETY.md for the initial scope and safety rules.
