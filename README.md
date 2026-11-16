@@ -13,15 +13,14 @@ Copy-Item .env.example .env
 
 Set GOOGLE_API_KEY in the local .env file. Do not commit .env or put keys in source, notebooks, or documentation.
 
-Check the local environment without making an API request:
+Check the Google connection with one short live request when a key is configured:
 
 ~~~powershell
-uv run python check_setup.py
+uv run python hello_ai.py
 ~~~
 
-Make one short live request when a key is configured:
+Run the chat-only prototype:
 
 ~~~powershell
-uv run python check_setup.py --api
-uv run python hello_ai.py
+uv run streamlit run app.py
 ~~~
