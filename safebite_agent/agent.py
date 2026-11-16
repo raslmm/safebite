@@ -86,7 +86,8 @@ def ask(
         model_port = model or GoogleInteractionsModel()
     except SafeBiteModelError as error:
         return Turn(str(error), "error", (), None, None)
-        message: str | None = _context(user_message, label)
+
+    message: str | None = _context(user_message, label)
     previous_interaction_id: str | None = None
     function_results: list[dict[str, Any]] = []
     tool_log: list[ToolResult] = []
