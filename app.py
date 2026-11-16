@@ -1,24 +1,12 @@
-"""Chat-only Streamlit interface for the SafeBite prototype."""
+"""Streamlit chat interface for the SafeBite typed-label prototype."""
 
-import re
 from typing import Any
 
 import streamlit as st
 
 from safebite_agent.agent import ask
 from safebite_agent.allergen_reference import EU_ALLERGEN_CATALOG
-from safebite_agent.schemas import AllergenId, AllergenProfile, LabelExtraction, RiskAssessment
-
-_WELCOME = """Welcome to the SafeBite prototype.
-
-Set your profile with `/profile peanuts, milk` (English or Portuguese names work), then paste the
-full ingredient list with `/label en: sugar, milk powder`. You can include statements with pipes:
-`/label en: sugar, cocoa | contains: milk | may contain: peanuts`. Use `pt` for Portuguese.
-
-Then ask me to check the label. Use `/reset` to clear the session profile and label. This prototype
-does not determine whether a product is safe. Chat text, label text, and tool results are sent to the
-configured Google model; do not include identifying information.
-"""
+from safebite_agent.schemas import AllergenProfile, LabelExtraction, RiskAssessment
 
 _STATE_LABELS = {
     "risk_found": "Risk found",
@@ -26,145 +14,194 @@ _STATE_LABELS = {
     "no_match_found_in_readable_text": "No match found in readable text",
     "cannot_assess": "Cannot assess",
 }
+_ALLERGENS_BY_ID = {item.allergen_id: item for item in EU_ALLERGEN_CATALOG.allergens}
 
 
-def _profile_aliases() -> dict[str, AllergenId]:
-    aliases: dict[str, AllergenId] = {}
-    for item in EU_ALLERGEN_CATALOG.allergens:
-        values = (
-            item.allergen_id.value,
-            item.name_en,
-            item.name_pt,
-            *item.match_terms_en,
-            *item.match_terms_pt,
-        )
-        for value in values:
-            aliases[value.casefold().strip()] = item.allergen_id
-    return aliases
-
-
-def _set_profile(command: str) -> str:
-    raw = command[len("/profile") :].strip()
-    if raw.casefold() in ("clear", "none"):
-        st.session_state.pop("profile_ids", None)
-        return "Your allergen profile was cleared for this session."
-
-    aliases = _profile_aliases()
-    selected: list[AllergenId] = []
-    unknown: list[str] = []
-    for part in raw.split(","):
-        name = part.strip().casefold()
-        if not name:
-            continue
-        allergen_id = aliases.get(name)
-        if allergen_id is None:
-            unknown.append(part.strip())
-        elif allergen_id not in selected:
-            selected.append(allergen_id)
-
-    if unknown or not selected:
-        return "I couldn't set that profile. Use comma-separated names such as `/profile peanuts, milk`."
-
-    st.session_state.profile_ids = [item.value for item in selected]
-    return f"Saved {len(selected)} selected allergen group(s) for this session."
-
-
-def _parse_label(command: str) -> LabelExtraction | None:
-    match = re.match(r"^/label\s+(pt|en)\s*:\s*(.+)$", command, re.IGNORECASE | re.DOTALL)
-    if match is None:
-        return None
-
-    language = match.group(1).lower()
-    parts = [part.strip() for part in match.group(2).split("|")]
-    ingredients: list[str] = []
-    contains: list[str] = []
-    may_contain: list[str] = []
-
-    for index, part in enumerate(parts):
-        section = re.match(
-            r"^(contains|contém|may\s+contain|pode\s+conter)\s*:\s*(.*)$",
-            part,
-            re.IGNORECASE,
-        )
-        if index == 0 and section is None:
-            ingredients.append(part)
-        elif section is not None:
-            section_name = re.sub(r"\s+", " ", section.group(1).casefold())
-            target = may_contain if section_name in ("may contain", "pode conter") else contains
-            target.append(section.group(2).strip())
-        elif part:
-            ingredients.append(part)
-
-    ingredient_text = " | ".join(ingredients).strip()
-    if not ingredient_text:
-        return None
-
-    extraction = LabelExtraction(
-        language=language,  # type: ignore[arg-type]
-        ingredients_text=ingredient_text,
-        contains_text=" | ".join(contains) or None,
-        may_contain_text=" | ".join(may_contain) or None,
-        is_complete=True,
-        human_reviewed=True,
-    )
-    st.session_state.label_data = extraction.model_dump(mode="json")
-    return extraction
+def _clear_session() -> None:
+    st.session_state.profile_widget = []
+    st.session_state.pop("label_data", None)
+    st.session_state.messages = [
+        {
+            "role": "assistant",
+            "content": "Your session has been cleared. Choose allergens and add a label when you are ready.",
+        }
+    ]
 
 
 def _show_assessment(data: dict[str, Any] | None) -> None:
     if data is None:
         return
+
     assessment = RiskAssessment.model_validate(data)
-    st.markdown(f"**Assessment: {_STATE_LABELS[assessment.state]}**")
-    st.write(assessment.explanation)
-    for item in assessment.evidence:
-        st.markdown(f"> {item.quote}")
-        st.caption(
-            f"{item.allergen_id.value} · {item.evidence_type.replace('_', ' ')} · "
-            f"{item.source_id} ({item.source_version})"
-        )
+    state = assessment.state
+    with st.container(border=True):
+        if state == "risk_found":
+            st.error(f"**{_STATE_LABELS[state]}**")
+        elif state == "possible_risk":
+            st.warning(f"**{_STATE_LABELS[state]}**")
+        elif state == "cannot_assess":
+            st.info(f"**{_STATE_LABELS[state]}**")
+        else:
+            st.info(f"**{_STATE_LABELS[state]}**")
+
+        st.write(assessment.explanation)
+        for evidence in assessment.evidence:
+            allergen = _ALLERGENS_BY_ID[evidence.allergen_id]
+            st.markdown(f"> {evidence.quote}")
+            st.caption(
+                f"{allergen.name_en} / {allergen.name_pt} · "
+                f"{evidence.evidence_type.replace('_', ' ')} · "
+                f"Annex II ({evidence.source_version})"
+            )
 
 
-st.set_page_config(page_title="SafeBite", page_icon="🥗")
-st.title("SafeBite")
-st.caption("Chat-only prototype · session data is cleared when this session ends")
+def _save_label() -> None:
+    ingredients = st.session_state.get("ingredients_input", "").strip()
+    if not ingredients:
+        st.session_state.label_error = "Enter the full ingredient list before saving the label."
+        return
+
+    extraction = LabelExtraction(
+        language=st.session_state.label_language,
+        ingredients_text=ingredients,
+        contains_text=st.session_state.get("contains_input", "").strip() or None,
+        may_contain_text=st.session_state.get("may_contain_input", "").strip() or None,
+        is_complete=True,
+        human_reviewed=True,
+    )
+    st.session_state.label_data = extraction.model_dump(mode="json")
+    st.session_state.pop("label_error", None)
+
+
+st.set_page_config(page_title="SafeBite", page_icon="🥗", layout="wide")
+st.markdown(
+    """<style>
+    .block-container {max-width: 1120px; padding-top: 2rem; padding-bottom: 2rem;}
+    [data-testid="stSidebar"] {border-right: 1px solid rgba(128,128,128,.18);}
+    </style>""",
+    unsafe_allow_html=True,
+)
 
 if "messages" not in st.session_state:
-    st.session_state.messages = [{"role": "assistant", "content": _WELCOME}]
+    st.session_state.messages = [
+        {
+            "role": "assistant",
+            "content": (
+                "Hi, I’m SafeBite. Choose your allergens and add a label in the sidebar, "
+                "then ask me to check it. I’ll show the checker’s result and supporting text here."
+            ),
+        }
+    ]
+
+with st.sidebar:
+    st.title("🥗 SafeBite")
+    st.caption("Food-label screening prototype")
+
+    st.subheader("Your profile")
+    selected_allergens = st.multiselect(
+        "Select the allergens you want to check",
+        options=list(_ALLERGENS_BY_ID),
+        format_func=lambda allergen_id: (
+            f"{_ALLERGENS_BY_ID[allergen_id].name_en} / {_ALLERGENS_BY_ID[allergen_id].name_pt}"
+        ),
+        key="profile_widget",
+        placeholder="Choose one or more",
+    )
+    st.caption("This selection is kept in this session and used by the Python checker.")
+
+    st.divider()
+    st.subheader("Label text")
+    st.caption("Paste the complete ingredients section. Review it before saving.")
+
+    with st.form("label_form"):
+        st.selectbox(
+            "Label language",
+            options=["en", "pt"],
+            format_func=lambda code: "English" if code == "en" else "Português",
+            key="label_language",
+        )
+        st.text_area(
+            "Ingredients",
+            key="ingredients_input",
+            height=130,
+            placeholder="e.g. wheat flour, milk powder, salt",
+        )
+        with st.expander("Add allergen statements (optional)"):
+            st.text_input("Contains", key="contains_input", placeholder="e.g. milk")
+            st.text_input(
+                "May contain",
+                key="may_contain_input",
+                placeholder="e.g. peanuts",
+            )
+        st.form_submit_button("Save label", type="primary", on_click=_save_label)
+
+    if st.session_state.get("label_error"):
+        st.warning(st.session_state.label_error)
+    elif st.session_state.get("label_data"):
+        st.success("Label saved for this session.")
+
+    with st.container(border=True):
+        st.markdown("**📷 Photo scanner**")
+        st.button(
+            "Coming soon",
+            disabled=True,
+            use_container_width=True,
+            help="Photo upload and label scanning are planned for an upcoming update.",
+        )
+
+    st.divider()
+    st.caption(
+        "Chat, pasted label text, and tool results are sent to the configured Google model. "
+        "Avoid identifying information. Session data is not saved as account history."
+    )
+    st.button("Clear session", on_click=_clear_session, use_container_width=True)
+
+st.title("Check a food label")
+st.write(
+    "Ask a question about the label you saved. The assessment comes from the deterministic checker."
+)
+
+profile_ready = bool(selected_allergens)
+label_data = st.session_state.get("label_data")
+label_ready = bool(label_data)
+
+profile_col, label_col = st.columns(2)
+with profile_col, st.container(border=True):
+    st.markdown("**Active profile**")
+    st.write(
+        ", ".join(_ALLERGENS_BY_ID[item].name_en for item in selected_allergens)
+        if profile_ready
+        else "No allergens selected yet."
+    )
+with label_col, st.container(border=True):
+    st.markdown("**Current label**")
+    if label_ready:
+        saved_label = LabelExtraction.model_validate(label_data)
+        st.write(f"Saved · {saved_label.language.upper()} · ingredient text ready")
+    else:
+        st.write("No label saved yet.")
 
 for message in st.session_state.messages:
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
         _show_assessment(message.get("assessment"))
 
-prompt = st.chat_input("Set a profile, paste a label, or ask a question")
+prompt = st.chat_input("Ask SafeBite to check this label")
 if prompt:
     st.session_state.messages.append({"role": "user", "content": prompt})
     with st.chat_message("user"):
         st.markdown(prompt)
 
     assessment_data: dict[str, Any] | None = None
-    if prompt.strip().casefold().startswith("/profile"):
-        response = _set_profile(prompt.strip())
-    elif prompt.strip().casefold().startswith("/label"):
-        label = _parse_label(prompt.strip())
+    if not profile_ready or not label_ready:
         response = (
-            "Saved the label text for this session. Ask me to check it against your profile."
-            if label is not None
-            else "Use `/label en: full ingredient list` or `/label pt: lista completa de ingredientes`."
+            "Choose at least one allergen and save the complete label text in the sidebar first."
         )
-    elif prompt.strip().casefold() == "/reset":
-        st.session_state.pop("profile_ids", None)
-        st.session_state.pop("label_data", None)
-        response = "Cleared the profile and label from this session."
-    elif not st.session_state.get("profile_ids") or not st.session_state.get("label_data"):
-        response = "First set a profile with `/profile ...` and paste a full label with `/label en: ...` or `/label pt: ...`."
     else:
-        active_profile = AllergenProfile(
-            selected_allergens=[AllergenId(value) for value in st.session_state.profile_ids]
-        )
-        active_label = LabelExtraction.model_validate(st.session_state.label_data)
-        turn = ask(prompt, active_profile, active_label)
+        active_profile = AllergenProfile(selected_allergens=selected_allergens)
+        active_label = LabelExtraction.model_validate(label_data)
+        with st.spinner("Checking the label…"):
+            turn = ask(prompt, active_profile, active_label)
         response = turn.answer
         if turn.assessment is not None:
             assessment_data = turn.assessment.model_dump(mode="json")
