@@ -47,3 +47,6 @@ TRACING_ENABLED = (
     and _setting("LANGFUSE_TRACING_ENABLED", "true").lower() != "false"
 )
 TRACE_CONTENT = _setting("TRACE_CONTENT", "false").lower() == "true"
+
+MONGODB_URI = _setting("MONGODB_URI")
+MONGODB_DATABASE = _setting("MONGODB_DATABASE", "safebite") or "safebite"

@@ -6,6 +6,9 @@ import streamlit as st
 
 from safebite_agent.agent import ask
 from safebite_agent.allergen_reference import EU_ALLERGEN_CATALOG
+from safebite_agent.config import MONGODB_DATABASE, MONGODB_URI
+from safebite_agent.email_auth import AccountStoreError, EmailAccount, MongoAccountStore
+from safebite_agent.profile_store import MongoProfileStore, ProfileStoreError, identity_key
 from safebite_agent.schemas import AllergenProfile, LabelExtraction, RiskAssessment
 
 _STATE_LABELS = {
@@ -17,13 +20,99 @@ _STATE_LABELS = {
 _ALLERGENS_BY_ID = {item.allergen_id: item for item in EU_ALLERGEN_CATALOG.allergens}
 
 
+@st.cache_resource
+def _profile_store() -> MongoProfileStore:
+    store = MongoProfileStore(MONGODB_URI, MONGODB_DATABASE)
+    store.ping()
+    return store
+
+
+@st.cache_resource
+def _account_store() -> MongoAccountStore:
+    return MongoAccountStore(MONGODB_URI, MONGODB_DATABASE)
+
+
+def _email_login_callback() -> None:
+    st.session_state.pop("_safebite_auth_error", None)
+    try:
+        account = _account_store().authenticate(
+            st.session_state.get("login_email", ""),
+            st.session_state.get("login_password", ""),
+        )
+        if account is None:
+            st.session_state["_safebite_auth_error"] = (
+                "Email or password is incorrect, or sign-in is temporarily locked."
+            )
+        else:
+            st.session_state["_safebite_email_account_id"] = account.account_id
+    except AccountStoreError as exc:
+        st.session_state["_safebite_auth_error"] = str(exc)
+    st.session_state["login_password"] = ""
+
+
+def _email_register_callback() -> None:
+    st.session_state.pop("_safebite_auth_error", None)
+    email = st.session_state.get("register_email", "")
+    password = st.session_state.get("register_password", "")
+    password_confirm = st.session_state.get("register_password_confirm", "")
+    if password != password_confirm:
+        st.session_state["_safebite_auth_error"] = "The passwords do not match."
+    else:
+        try:
+            account = _account_store().create_account(email, password)
+            st.session_state["_safebite_email_account_id"] = account.account_id
+        except AccountStoreError as exc:
+            st.session_state["_safebite_auth_error"] = str(exc)
+    st.session_state["register_password"] = ""
+    st.session_state["register_password_confirm"] = ""
+
+
+def _render_login_page(auth_configured: bool) -> None:
+    st.title("🥗 SafeBite")
+    st.subheader("Sign in or create an account")
+    st.caption(
+        "Use the same sign-in method each time. Google and email/password accounts are separate."
+    )
+    if auth_error := st.session_state.pop("_safebite_auth_error", None):
+        st.error(auth_error)
+
+    google_tab, sign_in_tab, register_tab = st.tabs(
+        ["Google", "Email sign-in", "Create account"]
+    )
+    with google_tab:
+        st.write("Continue with Google. SafeBite does not receive or store your Google password.")
+        if not auth_configured:
+            st.info("Google sign-in is not configured yet. See docs/LOGIN_AND_MONGODB.md.")
+        elif st.button("Continue with Google", type="primary", key="google_login"):
+            st.login()
+
+    with sign_in_tab, st.form("email_login_form"):
+        st.text_input("Email", key="login_email")
+        st.text_input("Password", type="password", key="login_password")
+        st.form_submit_button("Sign in", type="primary", on_click=_email_login_callback)
+
+    with register_tab:
+        st.caption(
+            "Course prototype: email ownership is not verified and password reset is not configured. "
+            "Use a demo password with at least 12 characters."
+        )
+        with st.form("email_register_form"):
+            st.text_input("Email", key="register_email")
+            st.text_input("Password", type="password", key="register_password")
+            st.text_input(
+                "Confirm password", type="password", key="register_password_confirm"
+            )
+            st.form_submit_button(
+                "Create account", type="primary", on_click=_email_register_callback
+            )
+
+
 def _clear_session() -> None:
-    st.session_state.profile_widget = []
     st.session_state.pop("label_data", None)
     st.session_state.messages = [
         {
             "role": "assistant",
-            "content": "Your session has been cleared. Choose allergens and add a label when you are ready.",
+            "content": "Your chat and label session have been cleared. Add a label when you are ready.",
         }
     ]
 
@@ -74,6 +163,59 @@ def _save_label() -> None:
 
 
 st.set_page_config(page_title="SafeBite", page_icon="🥗", layout="wide")
+
+try:
+    auth_configured = bool(st.secrets.get("auth"))
+except FileNotFoundError:
+    auth_configured = False
+
+google_logged_in = bool(getattr(st.user, "is_logged_in", False))
+email_account: EmailAccount | None = None
+email_account_id = st.session_state.get("_safebite_email_account_id")
+if email_account_id:
+    try:
+        email_account = _account_store().get_account(str(email_account_id))
+    except AccountStoreError as exc:
+        st.error(str(exc))
+        st.stop()
+    if email_account is None:
+        st.session_state.pop("_safebite_email_account_id", None)
+
+if email_account is None and not google_logged_in:
+    _render_login_page(auth_configured)
+    st.stop()
+
+if email_account is not None:
+    user_key = identity_key("safebite-email-password", email_account.account_id)
+    user_email = email_account.email
+    auth_method = "email"
+else:
+    user_claims = st.user.to_dict()
+    user_key = identity_key(str(user_claims.get("iss", "")), str(user_claims.get("sub", "")))
+    user_email = str(user_claims.get("email", "signed in"))
+    auth_method = "google"
+
+try:
+    store = _profile_store()
+    stored_profile = store.load(user_key)
+except ProfileStoreError as exc:
+    st.error(str(exc))
+    st.info("Check docs/LOGIN_AND_MONGODB.md for login and database setup.")
+    st.stop()
+
+if st.session_state.get("active_user_key") != user_key:
+    st.session_state.active_user_key = user_key
+    st.session_state.profile_widget = (
+        [item.value for item in stored_profile.allergens.selected_allergens]
+        if stored_profile else []
+    )
+    st.session_state.profile_language = stored_profile.preferred_language if stored_profile else "en"
+    st.session_state.profile_consent = stored_profile is not None
+    st.session_state.pop("label_data", None)
+    st.session_state.messages = [{
+        "role": "assistant",
+        "content": "Choose your allergens and add a label, then ask me to check it.",
+    }]
 st.markdown(
     """<style>
     .block-container {max-width: 1120px; padding-top: 2rem; padding-bottom: 2rem;}
@@ -95,7 +237,14 @@ if "messages" not in st.session_state:
 
 with st.sidebar:
     st.title("🥗 SafeBite")
-    st.caption("Food-label screening prototype")
+    st.caption(f"Food-label screening · {user_email} · {auth_method}")
+    if st.button("Sign out", use_container_width=True):
+        st.session_state.clear()
+        if google_logged_in:
+            st.logout()
+            st.stop()
+        else:
+            st.rerun()
 
     st.subheader("Your profile")
     selected_allergens = st.multiselect(
@@ -107,11 +256,54 @@ with st.sidebar:
         key="profile_widget",
         placeholder="Choose one or more",
     )
-    st.caption("This selection is kept in this session and used by the Python checker.")
+    st.selectbox(
+        "Preferred language",
+        options=["en", "pt"],
+        format_func=lambda code: "English" if code == "en" else "Português",
+        key="profile_language",
+    )
+    st.checkbox(
+        "I agree to save my allergy selections to my account for future sessions.",
+        key="profile_consent",
+        help="Allergy information is sensitive health data. Save only if you want this feature.",
+    )
+    if st.button("Save profile", type="primary", use_container_width=True):
+        if not st.session_state.profile_consent:
+            st.warning("Agree to profile storage before saving.")
+        elif not selected_allergens:
+            st.warning("Choose at least one allergen before saving.")
+        else:
+            try:
+                store.save(
+                    user_key,
+                    AllergenProfile(selected_allergens=selected_allergens),
+                    st.session_state.profile_language,
+                )
+                st.success("Allergy profile saved to your account.")
+            except ProfileStoreError as exc:
+                st.error(str(exc))
+
+    with st.expander("Delete saved profile"):
+        st.caption("This permanently removes your saved allergy selections from the database.")
+        confirm_delete = st.checkbox(
+            "I understand this cannot be undone.", key="confirm_delete_profile"
+        )
+        if st.button(
+            "Delete my saved profile", key="delete_profile", disabled=not confirm_delete
+        ):
+            try:
+                store.delete(user_key)
+                st.session_state.profile_widget = []
+                st.session_state.profile_consent = False
+                st.session_state.confirm_delete_profile = False
+                st.success("Saved profile deleted.")
+                st.rerun()
+            except ProfileStoreError as exc:
+                st.error(str(exc))
 
     st.divider()
     st.subheader("Label text")
-    st.caption("Paste the complete ingredients section. Review it before saving.")
+    st.caption("Paste the complete ingredients section. Review it before saving; label text stays in this session.")
 
     with st.form("label_form"):
         st.selectbox(
@@ -151,8 +343,8 @@ with st.sidebar:
 
     st.divider()
     st.caption(
-        "Chat, pasted label text, and tool results are sent to the configured Google model. "
-        "Avoid identifying information. Session data is not saved as account history."
+        "Chat and label text are sent to the configured Google model. Avoid identifying details. "
+        "Only your allergy profile is saved when you opt in; label text stays session-only."
     )
     st.button("Clear session", on_click=_clear_session, use_container_width=True)
 
