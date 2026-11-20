@@ -1,6 +1,7 @@
 """Streamlit chat interface for the SafeBite typed-label prototype."""
 
 from typing import Any
+from uuid import uuid4
 
 import streamlit as st
 
@@ -67,6 +68,12 @@ def _email_register_callback() -> None:
     st.session_state["register_password_confirm"] = ""
 
 
+def _guest_login_callback() -> None:
+    st.session_state.pop("_safebite_auth_error", None)
+    st.session_state.pop("_safebite_email_account_id", None)
+    st.session_state["_safebite_guest_id"] = uuid4().hex
+
+
 def _render_login_page(auth_configured: bool) -> None:
     st.title("🥗 SafeBite")
     st.subheader("Sign in or create an account")
@@ -105,6 +112,17 @@ def _render_login_page(auth_configured: bool) -> None:
             st.form_submit_button(
                 "Create account", type="primary", on_click=_email_register_callback
             )
+
+    st.divider()
+    st.caption(
+        "Guest mode does not create an account or save your profile. "
+        "Your session data is cleared when the session ends."
+    )
+    st.button(
+        "Continue as guest",
+        use_container_width=True,
+        on_click=_guest_login_callback,
+    )
 
 
 def _clear_session() -> None:
@@ -170,9 +188,10 @@ except FileNotFoundError:
     auth_configured = False
 
 google_logged_in = bool(getattr(st.user, "is_logged_in", False))
+guest_id = st.session_state.get("_safebite_guest_id")
 email_account: EmailAccount | None = None
 email_account_id = st.session_state.get("_safebite_email_account_id")
-if email_account_id:
+if not guest_id and email_account_id:
     try:
         email_account = _account_store().get_account(str(email_account_id))
     except AccountStoreError as exc:
@@ -181,11 +200,15 @@ if email_account_id:
     if email_account is None:
         st.session_state.pop("_safebite_email_account_id", None)
 
-if email_account is None and not google_logged_in:
+if not guest_id and email_account is None and not google_logged_in:
     _render_login_page(auth_configured)
     st.stop()
 
-if email_account is not None:
+if guest_id:
+    user_key = f"guest:{guest_id}"
+    user_email = "Guest"
+    auth_method = "guest"
+elif email_account is not None:
     user_key = identity_key("safebite-email-password", email_account.account_id)
     user_email = email_account.email
     auth_method = "email"
@@ -195,13 +218,16 @@ else:
     user_email = str(user_claims.get("email", "signed in"))
     auth_method = "google"
 
-try:
-    store = _profile_store()
-    stored_profile = store.load(user_key)
-except ProfileStoreError as exc:
-    st.error(str(exc))
-    st.info("Check docs/LOGIN_AND_MONGODB.md for login and database setup.")
-    st.stop()
+stored_profile = None
+store: MongoProfileStore | None = None
+if auth_method != "guest":
+    try:
+        store = _profile_store()
+        stored_profile = store.load(user_key)
+    except ProfileStoreError as exc:
+        st.error(str(exc))
+        st.info("Check docs/LOGIN_AND_MONGODB.md for login and database setup.")
+        st.stop()
 
 if st.session_state.get("active_user_key") != user_key:
     st.session_state.active_user_key = user_key
@@ -238,9 +264,10 @@ if "messages" not in st.session_state:
 with st.sidebar:
     st.title("🥗 SafeBite")
     st.caption(f"Food-label screening · {user_email} · {auth_method}")
-    if st.button("Sign out", use_container_width=True):
+    signout_label = "Exit guest session" if auth_method == "guest" else "Sign out"
+    if st.button(signout_label, use_container_width=True):
         st.session_state.clear()
-        if google_logged_in:
+        if auth_method == "google":
             st.logout()
             st.stop()
         else:
@@ -262,44 +289,52 @@ with st.sidebar:
         format_func=lambda code: "English" if code == "en" else "Português",
         key="profile_language",
     )
-    st.checkbox(
-        "I agree to save my allergy selections to my account for future sessions.",
-        key="profile_consent",
-        help="Allergy information is sensitive health data. Save only if you want this feature.",
-    )
-    if st.button("Save profile", type="primary", use_container_width=True):
-        if not st.session_state.profile_consent:
-            st.warning("Agree to profile storage before saving.")
-        elif not selected_allergens:
-            st.warning("Choose at least one allergen before saving.")
-        else:
-            try:
-                store.save(
-                    user_key,
-                    AllergenProfile(selected_allergens=selected_allergens),
-                    st.session_state.profile_language,
-                )
-                st.success("Allergy profile saved to your account.")
-            except ProfileStoreError as exc:
-                st.error(str(exc))
-
-    with st.expander("Delete saved profile"):
-        st.caption("This permanently removes your saved allergy selections from the database.")
-        confirm_delete = st.checkbox(
-            "I understand this cannot be undone.", key="confirm_delete_profile"
+    if auth_method == "guest":
+        st.caption(
+            "Guest mode: your allergy selections and label stay in this session only. "
+            "They are not saved to an account or MongoDB."
         )
-        if st.button(
-            "Delete my saved profile", key="delete_profile", disabled=not confirm_delete
-        ):
-            try:
-                store.delete(user_key)
-                st.session_state.profile_widget = []
-                st.session_state.profile_consent = False
-                st.session_state.confirm_delete_profile = False
-                st.success("Saved profile deleted.")
-                st.rerun()
-            except ProfileStoreError as exc:
-                st.error(str(exc))
+    else:
+        st.checkbox(
+            "I agree to save my allergy selections to my account for future sessions.",
+            key="profile_consent",
+            help="Allergy information is sensitive health data. Save only if you want this feature.",
+        )
+        if st.button("Save profile", type="primary", use_container_width=True):
+            if not st.session_state.profile_consent:
+                st.warning("Agree to profile storage before saving.")
+            elif not selected_allergens:
+                st.warning("Choose at least one allergen before saving.")
+            else:
+                try:
+                    assert store is not None
+                    store.save(
+                        user_key,
+                        AllergenProfile(selected_allergens=selected_allergens),
+                        st.session_state.profile_language,
+                    )
+                    st.success("Allergy profile saved to your account.")
+                except ProfileStoreError as exc:
+                    st.error(str(exc))
+
+        with st.expander("Delete saved profile"):
+            st.caption("This permanently removes your saved allergy selections from the database.")
+            confirm_delete = st.checkbox(
+                "I understand this cannot be undone.", key="confirm_delete_profile"
+            )
+            if st.button(
+                "Delete my saved profile", key="delete_profile", disabled=not confirm_delete
+            ):
+                try:
+                    assert store is not None
+                    store.delete(user_key)
+                    st.session_state.profile_widget = []
+                    st.session_state.profile_consent = False
+                    st.session_state.confirm_delete_profile = False
+                    st.success("Saved profile deleted.")
+                    st.rerun()
+                except ProfileStoreError as exc:
+                    st.error(str(exc))
 
     st.divider()
     st.subheader("Label text")

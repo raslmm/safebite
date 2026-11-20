@@ -20,7 +20,7 @@ load_dotenv(ENV_FILE, override=False)
 
 
 def _setting(name: str, default: str = "") -> str:
-    """Read environment/.env first, then Streamlit secrets when running the app."""
+    """Read local environment values first, then Streamlit secrets (including Cloud secrets)."""
     value = os.getenv(name, "").strip()
     if value:
         return value

@@ -12,7 +12,7 @@ A person shopping in Portugal selects their food allergens, uploads a photo of a
 - **Input:** one JPG, JPEG, or PNG photo per scan. PDFs and multiple-image options are still under consideration.
 - **Profile:** one or more of the 14 EU-regulated allergen groups. The user can opt in to save allergen IDs and preferred language to their account in MongoDB; they can delete the saved profile.
 - **References:** a small, reviewed, versioned list of canonical allergen names and aliases. Base the 14 EU allergen groups on [Regulation (EU) No 1169/2011, Annex II](https://eur-lex.europa.eu/legal-content/EN/TXT/?uri=CELEX:32011R1169) and the [European Commission allergen guidance](https://food.ec.europa.eu/food-safety/campaign-2026/allergies_en). Preserve source-specific exemptions and conditions. Unreviewed terms are not confirmed matches.
-- **Data:** users can sign in with Google OpenID Connect or a course-demo email/password account. Allergy profiles persist only after explicit opt-in and can be deleted. Pasted label text, chat, and scan records remain session-only; photos are not retained by default.
+- **Data:** users can sign in with Google OpenID Connect or a course-demo email/password account, or continue as a guest. Allergy profiles persist only after explicit opt-in and can be deleted. Guest profile selections, pasted label text, and chat remain in session state only; they are not saved to MongoDB and are cleared when the session ends. Photos are not retained by default.
 - **Agent data tools:** the agent can check the current label against the active profile and list/save session scans. Deleting a scan requires an explicit UI confirmation; the model cannot approve it.
 
 ## Result states
