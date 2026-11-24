@@ -7,7 +7,7 @@ from uuid import uuid4
 
 import streamlit as st
 
-from safebite_agent.agent import ask
+from safebite_agent.agent import ask, basic_reply
 from safebite_agent.allergen_reference import EU_ALLERGEN_CATALOG
 from safebite_agent.config import MONGODB_DATABASE, MONGODB_URI
 from safebite_agent.email_auth import AccountStoreError, EmailAccount, MongoAccountStore
@@ -694,14 +694,33 @@ for message in st.session_state.messages:
         st.markdown(message["content"])
         _show_assessment(message.get("assessment"))
 
-prompt = st.chat_input("Ask SafeBite to check this label")
+camera_col, upload_col, prompt_col = st.columns([0.06, 0.06, 0.88], vertical_alignment="bottom")
+with camera_col:
+    st.button(
+        " ",
+        icon=":material/photo_camera:",
+        help="Take a photo (coming soon)",
+        key="chat_take_photo",
+    )
+with upload_col:
+    st.button(
+        " ",
+        icon=":material/image:",
+        help="Upload an image (coming soon)",
+        key="chat_upload_image",
+    )
+with prompt_col:
+    prompt = st.chat_input("Ask SafeBite to check this label")
+
 if prompt:
     st.session_state.messages.append({"role": "user", "content": prompt})
     with st.chat_message("user"):
         st.markdown(prompt)
 
     assessment_data: dict[str, Any] | None = None
-    if not profile_ready or not label_ready:
+    if quick_reply := basic_reply(prompt):
+        response = quick_reply
+    elif not profile_ready or not label_ready:
         response = (
             "Choose at least one allergen and save the complete label text in the sidebar first."
         )
