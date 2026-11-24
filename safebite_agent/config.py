@@ -10,7 +10,6 @@ TRACE_CONTENT: record input/output content only when explicitly enabled.
 
 import os
 from pathlib import Path
-from typing import Any
 
 from dotenv import load_dotenv
 
@@ -20,7 +19,12 @@ load_dotenv(ENV_FILE, override=False)
 
 
 def _setting(name: str, default: str = "") -> str:
-    """Read local environment values first, then Streamlit secrets (including Cloud secrets)."""
+    """Read process/.env settings, then explicitly enabled Community Cloud secrets.
+
+    Local ``.streamlit/secrets.toml`` is reserved for Streamlit's OIDC ``[auth]``
+    configuration. App/API settings must come from ``.env`` locally or from the
+    Community Cloud secret store after its opt-in switch has been set.
+    """
     value = os.getenv(name, "").strip()
     if value:
         return value
@@ -28,10 +32,16 @@ def _setting(name: str, default: str = "") -> str:
     try:
         import streamlit as st
 
-        secret: Any = st.secrets.get(name, default)
+        secrets: Any = st.secrets
     except FileNotFoundError:
-        secret = default
-    return str(secret).strip()
+        return default
+
+    cloud_fallback_enabled = str(
+        secrets.get("SAFEBITE_USE_CLOUD_SECRETS", "")
+    ).strip().lower() == "true"
+    if not cloud_fallback_enabled:
+        return default
+    return str(secrets.get(name, default)).strip()
 
 
 GOOGLE_API_KEY = _setting("GOOGLE_API_KEY")

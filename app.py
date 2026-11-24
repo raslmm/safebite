@@ -1,5 +1,6 @@
 """Streamlit chat interface for the SafeBite typed-label prototype."""
 
+from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
@@ -19,6 +20,7 @@ _STATE_LABELS = {
     "cannot_assess": "Cannot assess",
 }
 _ALLERGENS_BY_ID = {item.allergen_id: item for item in EU_ALLERGEN_CATALOG.allergens}
+_LOGO_PATH = Path(__file__).resolve().parent / "assets" / "safebite-logo.png"
 
 
 @st.cache_resource
@@ -75,7 +77,7 @@ def _guest_login_callback() -> None:
 
 
 def _render_login_page(auth_configured: bool) -> None:
-    st.title("🥗 SafeBite")
+    st.image(str(_LOGO_PATH), width=224)
     st.subheader("Sign in or create an account")
     st.caption(
         "Use the same sign-in method each time. Google and email/password accounts are separate."
@@ -180,7 +182,11 @@ def _save_label() -> None:
     st.session_state.pop("label_error", None)
 
 
-st.set_page_config(page_title="SafeBite", page_icon="🥗", layout="wide")
+st.set_page_config(
+    page_title="SafeBite",
+    page_icon=str(_LOGO_PATH),
+    layout="wide",
+)
 
 try:
     auth_configured = bool(st.secrets.get("auth"))
@@ -262,7 +268,7 @@ if "messages" not in st.session_state:
     ]
 
 with st.sidebar:
-    st.title("🥗 SafeBite")
+    st.image(str(_LOGO_PATH), width=190)
     st.caption(f"Food-label screening · {user_email} · {auth_method}")
     signout_label = "Exit guest session" if auth_method == "guest" else "Sign out"
     if st.button(signout_label, use_container_width=True):
