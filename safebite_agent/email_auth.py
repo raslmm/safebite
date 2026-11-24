@@ -13,7 +13,7 @@ from pymongo.collection import Collection
 from pymongo.errors import DuplicateKeyError, PyMongoError
 
 ACCOUNT_COLLECTION = "user_accounts"
-MIN_PASSWORD_LENGTH = 12
+MIN_PASSWORD_LENGTH = 6
 MAX_PASSWORD_LENGTH = 128
 MAX_FAILED_LOGINS = 5
 LOCKOUT_DURATION = timedelta(minutes=15)
@@ -64,7 +64,7 @@ class MongoAccountStore:
     @staticmethod
     def _validate_password(password: str) -> None:
         if len(password) < MIN_PASSWORD_LENGTH:
-            raise AccountStoreError("Use a password with at least 12 characters.")
+            raise AccountStoreError("Use a password with at least 6 characters.")
         if len(password) > MAX_PASSWORD_LENGTH:
             raise AccountStoreError("Password must be 128 characters or fewer.")
 
