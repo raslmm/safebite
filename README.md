@@ -8,7 +8,6 @@
 <p align="center">
   <a href="https://safebite-ai.streamlit.app/">Open the live app</a>
 <br/> <br/>
-  &nbsp;·&nbsp;
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="MIT License"></a>
 </p>
 
