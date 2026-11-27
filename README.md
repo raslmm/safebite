@@ -16,16 +16,22 @@
 - Check ingredient and label text against the 14 EU allergen groups, both in English or Portuguese.
 - Show a cautious result with matching label evidence.
 - Sign in with Google or email/password, or try the app as a guest.
-- Optionally save an allergy profile to your account.
+- Capture or upload a package photo, review the extracted label text, and check it against your profile.
+- Offer a confirmed profile addition when a user clearly states an allergy in chat.
+- Optionally save allergy selections and reviewed scanned goods to your account.
 
-Photo scanning and barcode lookup are not available yet. A “no match” result is not a guarantee that a product is safe; always verify the package.
+Scanned label text must be reviewed before assessment. Uploaded photos are sent to the configured Gemini model for text extraction and are not stored. Saved product history stores product details and reviewed label text only after the user opts in. A “no match” result is not a guarantee that a product is safe; always verify the package.
+
+For multilingual packages, SafeBite uses the printed English ingredient text first and falls back to printed Portuguese when English is absent. If neither is present, the scan is not assessed.
+
+Photo text extraction uses the existing `GOOGLE_API_KEY`; no separate OCR credential is needed.
 
 ## Requirements
 
 - Python 3.12
 - [uv](https://docs.astral.sh/uv/getting-started/installation/)
 
-Main packages: Streamlit and its auth extra for the app and Google sign-in, `pymongo` for MongoDB, `google-genai` for Gemini, and `argon2-cffi` for password hashing. Optional Langfuse tracing uses `langfuse`. Exact versions and transitive dependencies are recorded in `pyproject.toml` and `uv.lock`.
+Main packages: Streamlit and its auth extra for the app and Google sign-in, `pymongo` for MongoDB, `google-genai` for Gemini text and image processing, and `argon2-cffi` for password hashing. Optional Langfuse tracing uses `langfuse`. Exact versions and transitive dependencies are recorded in `pyproject.toml` and `uv.lock`.
 
 ## Set up locally
 
@@ -104,7 +110,7 @@ Replace the example values. Register the deployed callback URL exactly as shown 
 ## Notes
 
 - Email/password accounts require MongoDB, use a six-character minimum password, and are separate from Google accounts. Email verification and password reset are not configured.
-- Allergy profiles are saved only after the user opts in. Pasted label text stays in the current session.
+- Allergy profiles and scanned product history are saved only after the user opts in. Guest history stays in the current session.
 - Product data and model output can be incomplete. SafeBite is not medical advice and does not replace checking the physical package.
 - See [safety and data handling](docs/SAFETY.md) and the [tool contract](docs/TOOLS.md).
 

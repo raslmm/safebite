@@ -1,6 +1,8 @@
 """Streamlit chat interface for the SafeBite typed-label prototype."""
 
 import base64
+import hashlib
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -11,8 +13,15 @@ from safebite_agent.agent import ask, basic_reply
 from safebite_agent.allergen_reference import EU_ALLERGEN_CATALOG
 from safebite_agent.config import MONGODB_DATABASE, MONGODB_URI
 from safebite_agent.email_auth import AccountStoreError, EmailAccount, MongoAccountStore
-from safebite_agent.profile_store import MongoProfileStore, ProfileStoreError, identity_key
-from safebite_agent.schemas import AllergenProfile, LabelExtraction, RiskAssessment
+from safebite_agent.profile_store import (
+    MongoProfileStore,
+    ProfileStoreError,
+    StoredGood,
+    identity_key,
+)
+from safebite_agent.product_scanner import ProductScanError, extract_label_from_image
+from safebite_agent.profile_intake import explicit_allergy_additions
+from safebite_agent.schemas import AllergenId, AllergenProfile, LabelExtraction, RiskAssessment
 
 _STATE_LABELS = {
     "risk_found": "Risk found",
@@ -427,6 +436,9 @@ def _show_assessment(data: dict[str, Any] | None) -> None:
 
 
 def _save_label() -> None:
+    if not st.session_state.get("label_review_confirmed", False):
+        st.session_state.label_error = "Review the full package label and confirm it before saving."
+        return
     ingredients = st.session_state.get("ingredients_input", "").strip()
     if not ingredients:
         st.session_state.label_error = "Enter the full ingredient list before saving the label."
@@ -437,11 +449,89 @@ def _save_label() -> None:
         ingredients_text=ingredients,
         contains_text=st.session_state.get("contains_input", "").strip() or None,
         may_contain_text=st.session_state.get("may_contain_input", "").strip() or None,
+        # Saving requires an explicit review confirmation; resolved OCR uncertainty is cleared.
+        uncertain_fields=[],
         is_complete=True,
         human_reviewed=True,
     )
     st.session_state.label_data = extraction.model_dump(mode="json")
     st.session_state.pop("label_error", None)
+
+
+def _restore_scanned_good() -> None:
+    good_id = st.session_state.get("previous_good")
+    good = st.session_state.get("previous_goods_by_id", {}).get(good_id)
+    if good is None:
+        return
+    st.session_state["product_name_input"] = good.name
+    st.session_state["product_code_input"] = good.product_code
+    st.session_state["ingredients_input"] = good.ingredients_text
+    st.session_state["contains_input"] = good.contains_text
+    st.session_state["may_contain_input"] = good.may_contain_text
+    st.session_state["label_language"] = good.language
+    st.session_state["scan_uncertain_fields"] = []
+    st.session_state["label_review_confirmed"] = False
+    st.session_state["confirm_remove_previous_good"] = False
+    st.session_state["active_label_source"] = "previous scan"
+    st.session_state.pop("label_data", None)
+    st.session_state.pop("label_error", None)
+
+
+def _delete_previous_good() -> None:
+    good_id = st.session_state.get("previous_good")
+    good = st.session_state.get("previous_goods_by_id", {}).get(good_id)
+    if good is None:
+        return
+    if st.session_state.get("active_auth_method") == "guest":
+        st.session_state["guest_scanned_goods"] = [
+            item for item in st.session_state.get("guest_scanned_goods", [])
+            if item.good_id != good_id
+        ]
+    else:
+        try:
+            _profile_store().delete_scanned_good(st.session_state["active_user_key"], good_id)
+        except ProfileStoreError as exc:
+            st.session_state["history_error"] = str(exc)
+            return
+    st.session_state["previous_good"] = ""
+    st.session_state.pop("history_error", None)
+
+
+def _confirm_allergen_additions() -> None:
+    additions = st.session_state.get("pending_allergen_additions", [])
+    current = [AllergenId(value) for value in st.session_state.get("profile_widget", [])]
+    merged = list(dict.fromkeys([*current, *[AllergenId(value) for value in additions]]))
+    st.session_state["profile_widget"] = [item.value for item in merged]
+    st.session_state.pop("pending_allergen_additions", None)
+
+    auth_method = st.session_state.get("active_auth_method", "guest")
+    if auth_method == "guest":
+        st.session_state["profile_update_notice"] = (
+            "Added to your active allergy selection for this guest session."
+        )
+    elif st.session_state.get("profile_consent"):
+        try:
+            _profile_store().save(
+                st.session_state["active_user_key"],
+                AllergenProfile(selected_allergens=merged),
+                st.session_state.get("profile_language", "en"),
+            )
+            st.session_state["profile_update_notice"] = (
+                "Allergy added and saved to your account."
+            )
+        except ProfileStoreError as exc:
+            st.session_state["profile_update_notice"] = (
+                f"Added to the active selection, but the account save failed: {exc}"
+            )
+    else:
+        st.session_state["profile_update_notice"] = (
+            "Added to your active selection. Agree to profile storage and choose Save profile "
+            "in the sidebar to keep this change for future sessions."
+        )
+
+
+def _decline_allergen_additions() -> None:
+    st.session_state.pop("pending_allergen_additions", None)
 
 
 st.set_page_config(
@@ -503,8 +593,40 @@ if auth_method != "guest":
         st.info("Check docs/LOGIN_AND_MONGODB.md for login and database setup.")
         st.stop()
 
+st.session_state["active_auth_method"] = auth_method
+if auth_method == "guest":
+    st.session_state.setdefault("guest_scanned_goods", [])
+    saved_goods: list[StoredGood] = st.session_state["guest_scanned_goods"]
+else:
+    try:
+        assert store is not None
+        saved_goods = store.list_scanned_goods(user_key)
+        st.session_state.pop("history_error", None)
+    except ProfileStoreError as exc:
+        saved_goods = []
+        st.session_state["history_error"] = str(exc)
+st.session_state["previous_goods_by_id"] = {item.good_id: item for item in saved_goods}
+
 if st.session_state.get("active_user_key") != user_key:
     st.session_state.active_user_key = user_key
+    for key in (
+        "previous_good",
+        "product_name_input",
+        "product_code_input",
+        "ingredients_input",
+        "contains_input",
+        "may_contain_input",
+        "label_language",
+        "label_review_confirmed",
+        "scan_uncertain_fields",
+        "active_label_source",
+        "scan_status",
+        "save_goods_consent",
+        "confirm_remove_previous_good",
+        "pending_allergen_additions",
+        "profile_update_notice",
+    ):
+        st.session_state.pop(key, None)
     st.session_state.profile_widget = (
         [item.value for item in stored_profile.allergens.selected_allergens]
         if stored_profile
@@ -521,6 +643,9 @@ if st.session_state.get("active_user_key") != user_key:
             "content": "Choose your allergens and add a label, then ask me to check it.",
         }
     ]
+
+scan_widget_suffix = hashlib.sha256(user_key.encode()).hexdigest()[:12]
+scan_digest_key = f"last_scanned_image_digest_{scan_widget_suffix}"
 st.markdown(
     """<style>
     .block-container {max-width: 1120px; padding-top: 2rem; padding-bottom: 2rem;}
@@ -616,16 +741,121 @@ with st.sidebar:
                     st.error(str(exc))
 
     st.divider()
-    st.subheader("Label text")
+    st.subheader("Scan a product")
     st.caption(
-        "Paste the complete ingredients section. Review it before saving; label text stays in this session."
+        "Capture the ingredient panel or upload a clear label photo. "
+        "Check the extracted text before saving it."
     )
+    scan_mode = st.radio(
+        "Image source",
+        options=["Upload photo", "Use camera"],
+        horizontal=True,
+        label_visibility="collapsed",
+        key=f"scan_input_mode_{scan_widget_suffix}",
+    )
+    if scan_mode == "Upload photo":
+        image_file = st.file_uploader(
+            "Upload label image",
+            type=["jpg", "jpeg", "png"],
+            key=f"scan_image_upload_{scan_widget_suffix}",
+            max_upload_size=10,
+        )
+    else:
+        image_file = st.camera_input("Take label photo", key=f"scan_camera_image_{scan_widget_suffix}")
+    if image_file is not None:
+        image_bytes = image_file.getvalue()
+        image_digest = hashlib.sha256(image_bytes).hexdigest()
+        if st.session_state.get(scan_digest_key) != image_digest:
+            for key in (
+                "product_name_input",
+                "product_code_input",
+                "ingredients_input",
+                "contains_input",
+                "may_contain_input",
+            ):
+                st.session_state[key] = ""
+            st.session_state["label_language"] = "unknown"
+            st.session_state["scan_uncertain_fields"] = []
+            st.session_state["label_review_confirmed"] = False
+            st.session_state.pop("scan_status", None)
+            st.session_state.pop("label_data", None)
+            st.session_state.pop("label_error", None)
+            with st.spinner("Reading the label…"):
+                try:
+                    scan = extract_label_from_image(image_bytes)
+                    st.session_state["product_name_input"] = scan.product_name
+                    st.session_state["product_code_input"] = scan.product_code
+                    ingredients_en = scan.ingredients_text_en.strip()
+                    ingredients_pt = scan.ingredients_text_pt.strip()
+                    if ingredients_en:
+                        preferred_language = "en"
+                    elif ingredients_pt:
+                        preferred_language = "pt"
+                    else:
+                        preferred_language = "unsupported"
+                    st.session_state["ingredients_input"] = ingredients_en or ingredients_pt
+                    st.session_state["contains_input"] = (
+                        scan.contains_text_en.strip() or scan.contains_text_pt.strip()
+                    )
+                    st.session_state["may_contain_input"] = (
+                        scan.may_contain_text_en.strip() or scan.may_contain_text_pt.strip()
+                    )
+                    st.session_state["label_language"] = preferred_language
+                    field_names = {
+                        "ingredients": "ingredients_text",
+                        "ingredients_text": "ingredients_text",
+                        "ingredients_text_en": "ingredients_text",
+                        "ingredients_text_pt": "ingredients_text",
+                        "contains": "contains_text",
+                        "contains_text": "contains_text",
+                        "contains_text_en": "contains_text",
+                        "contains_text_pt": "contains_text",
+                        "may contain": "may_contain_text",
+                        "may_contain": "may_contain_text",
+                        "may_contain_text": "may_contain_text",
+                        "may_contain_text_en": "may_contain_text",
+                        "may_contain_text_pt": "may_contain_text",
+                    }
+                    uncertain = [
+                        field_names[item.casefold()]
+                        for item in scan.uncertain_fields
+                        if item.casefold() in field_names
+                    ]
+                    st.session_state["scan_uncertain_fields"] = list(dict.fromkeys(uncertain))
+                    st.session_state["label_review_confirmed"] = False
+                    st.session_state["active_label_source"] = "photo scan"
+                    st.session_state[scan_digest_key] = image_digest
+                    st.session_state.pop("label_data", None)
+                    st.session_state["scan_status"] = (
+                        "English text was selected when available; Portuguese is used when no English "
+                        "version was found. Review the fields below carefully."
+                        if preferred_language in {"en", "pt"}
+                        else "No English or Portuguese ingredient list was found. SafeBite cannot assess "
+                        "this image; enter a supported version manually."
+                    )
+                except ProductScanError as exc:
+                    st.error(str(exc))
+        if st.session_state.get("scan_status"):
+            st.info(st.session_state.scan_status)
 
+    st.subheader("Label details")
+    st.caption("Review the recognized text, or enter it manually, before saving the label.")
     with st.form("label_form"):
+        st.text_input("Product name", key="product_name_input", placeholder="Optional")
+        st.text_input(
+            "Printed product code (optional)",
+            key="product_code_input",
+            placeholder="e.g. G-03535",
+        )
         st.selectbox(
             "Label language",
-            options=["en", "pt"],
-            format_func=lambda code: "English" if code == "en" else "Português",
+            options=["en", "pt", "unknown", "unsupported"],
+            format_func=lambda code: {
+                "en": "English",
+                "pt": "Português",
+                "unknown": "Unknown",
+                "unsupported": "Other language",
+            }[code],
             key="label_language",
         )
         st.text_area(
@@ -634,35 +864,120 @@ with st.sidebar:
             height=130,
             placeholder="e.g. wheat flour, milk powder, salt",
         )
-        with st.expander("Add allergen statements (optional)"):
+        with st.expander("Contains / may contain statements"):
             st.text_input("Contains", key="contains_input", placeholder="e.g. milk")
-            st.text_input(
-                "May contain",
-                key="may_contain_input",
-                placeholder="e.g. peanuts",
-            )
-        st.form_submit_button("Save label", type="primary", on_click=_save_label)
+            st.text_input("May contain", key="may_contain_input", placeholder="e.g. peanuts")
+        st.checkbox(
+            "I reviewed the full package label and checked this text.",
+            key="label_review_confirmed",
+        )
+        st.form_submit_button("Save reviewed label", type="primary", on_click=_save_label)
 
+    if st.session_state.get("scan_uncertain_fields"):
+        st.caption("The scan flagged text that may be unclear. Correct it above before saving.")
     if st.session_state.get("label_error"):
         st.warning(st.session_state.label_error)
     elif st.session_state.get("label_data"):
-        st.success("Label saved for this session.")
-
-    with st.container(border=True):
-        st.markdown("**📷 Photo scanner**")
-        st.button(
-            "Coming soon",
-            disabled=True,
+        st.success("Reviewed label saved for this session.")
+        if auth_method != "guest":
+            st.checkbox(
+                "I agree to save this product and reviewed label text to my account.",
+                key="save_goods_consent",
+                help="The uploaded image is not saved. Only the product details and reviewed label text are stored.",
+            )
+        else:
+            st.caption("Guest scan history is kept only for this session.")
+        if st.button(
+            "Save to previously scanned goods",
+            key="save_scanned_good",
             use_container_width=True,
-            help="Photo upload and label scanning are planned for an upcoming update.",
-        )
+        ):
+            if auth_method != "guest" and not st.session_state.get("save_goods_consent"):
+                st.warning("Check the consent box before saving product history.")
+            else:
+                extraction = LabelExtraction.model_validate(st.session_state.label_data)
+                product_name = st.session_state.get("product_name_input", "").strip()
+                product_code = st.session_state.get("product_code_input", "").strip()
+                source = st.session_state.get("active_label_source", "manual entry")
+                try:
+                    if auth_method == "guest":
+                        good_id = uuid4().hex
+                        record = StoredGood(
+                            good_id=good_id,
+                            name=product_name or "Scanned product",
+                            product_code=product_code,
+                            ingredients_text=extraction.ingredients_text or "",
+                            contains_text=extraction.contains_text or "",
+                            may_contain_text=extraction.may_contain_text or "",
+                            language=extraction.language,
+                            source=source,
+                            saved_at=datetime.now(UTC),
+                        )
+                        st.session_state.guest_scanned_goods = [
+                            item for item in st.session_state.guest_scanned_goods
+                            if not product_code or item.product_code != product_code
+                        ] + [record]
+                    else:
+                        assert store is not None
+                        store.save_scanned_good(
+                            user_key,
+                            name=product_name,
+                            product_code=product_code,
+                            ingredients_text=extraction.ingredients_text or "",
+                            contains_text=extraction.contains_text or "",
+                            may_contain_text=extraction.may_contain_text or "",
+                            language=extraction.language,
+                            source=source,
+                        )
+                    st.success("Product saved to your scan history.")
+                    st.rerun()
+                except ProfileStoreError as exc:
+                    st.error(str(exc))
 
     st.divider()
     st.caption(
-        "Chat and label text are sent to the configured Google model. Avoid identifying details. "
-        "Only your allergy profile is saved when you opt in; label text stays session-only."
+        "Label photos are sent to the configured Google model for text extraction and are not stored. "
+        "Product history is saved only after you opt in and save it."
     )
     st.button("Clear session", on_click=_clear_session, use_container_width=True)
+
+    st.divider()
+    if st.session_state.get("history_error"):
+        st.warning(st.session_state.history_error)
+    if saved_goods:
+        st.selectbox(
+            "Previously scanned goods",
+            options=[""] + [good.good_id for good in saved_goods],
+            format_func=lambda good_id: (
+                "Choose a saved product…"
+                if not good_id
+                else next(
+                    (
+                        f"{good.name} · {good.product_code}"
+                        if good.product_code
+                        else good.name
+                        for good in saved_goods
+                        if good.good_id == good_id
+                    ),
+                    "Saved product",
+                )
+            ),
+            key="previous_good",
+            on_change=_restore_scanned_good,
+        )
+        confirm_remove_good = st.checkbox(
+            "Confirm removal of the selected scan.", key="confirm_remove_previous_good"
+        )
+        if st.button(
+            "Remove selected saved good",
+            key="remove_previous_good",
+            use_container_width=True,
+            disabled=not confirm_remove_good or not st.session_state.get("previous_good"),
+        ):
+            _delete_previous_good()
+            st.rerun()
+    else:
+        st.caption("Previously scanned goods will appear here when saved.")
 
 st.title("Check a food label")
 st.write(
@@ -694,23 +1009,7 @@ for message in st.session_state.messages:
         st.markdown(message["content"])
         _show_assessment(message.get("assessment"))
 
-camera_col, upload_col, prompt_col = st.columns([0.06, 0.06, 0.88], vertical_alignment="bottom")
-with camera_col:
-    st.button(
-        " ",
-        icon=":material/photo_camera:",
-        help="Take a photo (coming soon)",
-        key="chat_take_photo",
-    )
-with upload_col:
-    st.button(
-        " ",
-        icon=":material/image:",
-        help="Upload an image (coming soon)",
-        key="chat_upload_image",
-    )
-with prompt_col:
-    prompt = st.chat_input("Ask SafeBite to check this label")
+prompt = st.chat_input("Ask SafeBite to check this label")
 
 if prompt:
     st.session_state.messages.append({"role": "user", "content": prompt})
@@ -718,7 +1017,18 @@ if prompt:
         st.markdown(prompt)
 
     assessment_data: dict[str, Any] | None = None
-    if quick_reply := basic_reply(prompt):
+    active_allergens = [AllergenId(value) for value in selected_allergens]
+    proposed_additions = explicit_allergy_additions(prompt, active_allergens)
+    if proposed_additions:
+        st.session_state["pending_allergen_additions"] = [
+            item.value for item in proposed_additions
+        ]
+        names = ", ".join(_ALLERGENS_BY_ID[item].name_en for item in proposed_additions)
+        response = (
+            f"I noticed you mentioned an allergy to {names}. Would you like me to add "
+            "that to your active allergy profile? I’ll wait for your confirmation."
+        )
+    elif quick_reply := basic_reply(prompt):
         response = quick_reply
     elif not profile_ready or not label_ready:
         response = (
@@ -739,3 +1049,32 @@ if prompt:
     with st.chat_message("assistant"):
         st.markdown(response)
         _show_assessment(assessment_data)
+
+if st.session_state.get("profile_update_notice"):
+    st.info(st.session_state.pop("profile_update_notice"))
+
+pending_additions = st.session_state.get("pending_allergen_additions", [])
+if pending_additions:
+    pending_names = ", ".join(
+        _ALLERGENS_BY_ID[AllergenId(value)].name_en for value in pending_additions
+    )
+    with st.container(border=True):
+        st.markdown(f"**Add {pending_names} to your allergy profile?**")
+        st.caption(
+            "SafeBite only changes your profile after you confirm here. "
+            "Your account is updated only if you already opted in to profile storage."
+        )
+        confirm_col, decline_col = st.columns(2)
+        with confirm_col:
+            st.button(
+                "Add to profile",
+                key="confirm_profile_additions",
+                type="primary",
+                on_click=_confirm_allergen_additions,
+            )
+        with decline_col:
+            st.button(
+                "Keep unchanged",
+                key="decline_profile_additions",
+                on_click=_decline_allergen_additions,
+            )

@@ -12,6 +12,7 @@ dependencies = [
     "python-dotenv==1.2.4",
     "streamlit[auth]==1.67.0",
     "pymongo==4.20.0",
+    "pillow>=11.3.0",
 ]
 
 [dependency-groups]
